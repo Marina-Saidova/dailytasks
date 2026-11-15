@@ -39,6 +39,12 @@
     .group-heading:first-child{padding-top:2px}
     .urgent-heading{color:var(--urgent)}
     .task.urgent{border-color:#efc3ce;background:#fffafb}
+    .task.completed{opacity:.65;background:#f8f6f7}
+    .task.completed .task-desc{text-decoration:line-through}
+    .task.completed .tu,.task.completed .task-meta{text-decoration:line-through}
+    .complete-btn{height:29px;border-radius:8px;padding:0 7px;background:#eef6f0;color:#407b58;font-size:11px;font-weight:700}
+    .task.completed .complete-btn{background:#eee9ed;color:#746670}
+    .completed-heading{color:#8b7e86;margin-top:8px}
     .urgent-btn{width:30px;height:30px;border-radius:9px;background:#f5eff2;color:#a99aa2;font-size:20px;font-weight:800;line-height:1}
     .task.urgent .urgent-btn{background:#fde8ed;color:var(--urgent)}
     .task-main{min-width:0}
@@ -92,16 +98,19 @@
 */
 const SYNC_URL = "https://script.google.com/macros/s/AKfycbySOkfL6qa9nPlRecFSSQqkgJPOYwyFo7kY82qmfOT0rqd46c7HVnuPnExj64qjSVGZ/exec";
 const ACCESS_KEY = "123456789";
-const STORAGE_KEY = "simple-diary-v1";
-
+const STORAGE_KEY = "simple-diary-v2";
+const LEGACY_KEY = "simple-diary-v1";
 let tasks = [];
+let deleted = {};
 let editingId = null;
 let syncTimer = null;
-let cloudReady = false;
-
+let syncInProgress = false;
+let syncAgain = false;
+let localVersion = 0;
+let lastStamp = 0;
 const $ = id => document.getElementById(id);
 const form = $("taskForm");
-
+function stamp() { lastStamp = Math.max(Date.now(), lastStamp + 1); return lastStamp; }
 function setSync(label, status="") {
   $("syncText").textContent = label;
   $("syncDot").className = "dot " + status;
@@ -109,8 +118,28 @@ function setSync(label, status="") {
 function isConfigured() {
   return SYNC_URL.startsWith("https://script.google.com/") && !SYNC_URL.includes("ВСТАВЬТЕ_URL");
 }
-function localSave() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({tasks, updatedAt: Date.now()}));
+function readLocal() {
+  try {
+    const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_KEY) || "null");
+    return data && Array.isArray(data.tasks) ? data : {tasks:[], deleted:{}};
+  } catch { return {tasks:[],deleted:{}}; }
+}
+function persist() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({tasks, deleted}));
+}
+function mergeData(remote) {
+  if (!remote || !Array.isArray(remote.tasks)) return;
+  const allDeleted = {...deleted};
+  for (const [id,ts] of Object.entries(remote.deleted || {})) allDeleted[id] = Math.max(Number(allDeleted[id]||0),Number(ts||0));
+  const map = new Map();
+  for (const t of [...remote.tasks, ...tasks]) {
+    if (!t || !t.id) continue;
+    const existing = map.get(t.id);
+    if (!existing || Number(t.updatedAt||t.createdAt||0) > Number(existing.updatedAt||existing.createdAt||0)) map.set(t.id,t);
+  }
+  deleted = allDeleted;
+  tasks = [...map.values()].filter(t => Number(deleted[t.id]||0) < Number(t.updatedAt||t.createdAt||0));
+  persist();render();
 }
 function dateLabel(value) {
   if (!value) return "без срока";
@@ -125,7 +154,7 @@ function sortedTasks() {
 }
 function taskRow(t) {
   return `
-    <article class="task ${t.urgent ? "urgent" : ""}" data-id="${escapeHtml(t.id)}">
+    <article class="task ${t.urgent ? "urgent" : ""} ${t.completed ? "completed" : ""}" data-id="${escapeHtml(t.id)}">
       <button class="urgent-btn" title="${t.urgent ? "Снять срочность" : "Сделать срочной"}" aria-label="Переключить срочность">!</button>
       <div class="task-main">
         <div class="task-top">
@@ -136,6 +165,7 @@ function taskRow(t) {
         <div class="task-meta">${escapeHtml(t.assignee || "Исполнитель не указан")}</div>
       </div>
       <div class="task-actions">
+        <button class="complete-btn" title="${t.completed ? "Вернуть в работу" : "Выполнено"}" aria-label="${t.completed ? "Вернуть в работу" : "Выполнено"}">${t.completed ? "↶" : "✓"}</button>
         <button class="small-btn edit-btn" title="Изменить" aria-label="Изменить задачу">✎</button>
         <button class="small-btn delete-btn" title="Удалить" aria-label="Удалить задачу">×</button>
       </div>
@@ -162,8 +192,10 @@ function render() {
     return;
   }
 
-  const urgent = ordered.filter(t => t.urgent);
-  const regular = ordered.filter(t => !t.urgent);
+  const completed = ordered.filter(t => t.completed);
+  const active = ordered.filter(t => !t.completed);
+  const urgent = active.filter(t => t.urgent);
+  const regular = active.filter(t => !t.urgent);
   const byDate = new Map();
   regular.forEach(t => {
     const key = t.deadline || "";
@@ -183,71 +215,63 @@ function render() {
   dateKeys.forEach(date => {
     markup += `<div class="group-heading">${escapeHtml(groupTitle(date))}</div>${byDate.get(date).map(taskRow).join("")}`;
   });
+  if (completed.length) markup += `<div class="group-heading completed-heading">ВЫПОЛНЕНО</div>${completed.map(taskRow).join("")}`;
   list.innerHTML = markup;
 }
 function changed() {
-  localSave();
-  render();
-  scheduleSync();
+  localVersion++;
+  persist();render();scheduleSync();
 }
 function scheduleSync() {
   if (!isConfigured()) { setSync("Только на этом устройстве"); return; }
-  setSync("Сохранение…");
+  setSync("Ожидает синхронизации…");
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(saveCloud, 500);
+  syncTimer = setTimeout(syncCloud, 650);
 }
 function jsonp(params) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve,reject) => {
     const cb = "diary_cb_" + Math.random().toString(36).slice(2);
     const script = document.createElement("script");
-    const timeout = setTimeout(() => { cleanup(); reject(new Error("timeout")); }, 15000);
-    function cleanup(){ clearTimeout(timeout); delete window[cb]; script.remove(); }
-    window[cb] = data => { cleanup(); resolve(data); };
-    script.onerror = () => { cleanup(); reject(new Error("network")); };
-    const query = new URLSearchParams({...params, callback:cb, key:ACCESS_KEY});
-    script.src = SYNC_URL + (SYNC_URL.includes("?") ? "&" : "?") + query.toString();
+    const timeout = setTimeout(() => {cleanup();reject(new Error("timeout"));},20000);
+    function cleanup(){clearTimeout(timeout);delete window[cb];script.remove();}
+    window[cb] = data => {cleanup();resolve(data);};
+    script.onerror = () => {cleanup();reject(new Error("network"));};
+    script.src = SYNC_URL + (SYNC_URL.includes("?") ? "&" : "?") + new URLSearchParams({...params,callback:cb,key:ACCESS_KEY});
     document.head.appendChild(script);
   });
 }
-async function saveCloud() {
-  try {
-    const payload = btoa(unescape(encodeURIComponent(JSON.stringify({tasks, updatedAt:Date.now()}))));
-    const result = await jsonp({action:"save", data:payload});
-    if (!result || !result.ok) throw new Error("save failed");
-    cloudReady = true;
-    setSync("Синхронизировано", "ok");
-  } catch(e) {
-    setSync("Нет связи · сохранено на устройстве", "bad");
-  }
-}
-async function loadCloud() {
-  const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-  tasks = Array.isArray(cached?.tasks) ? cached.tasks : [];
-  render();
-  if (!isConfigured()) { setSync("Только на этом устройстве"); return; }
+async function syncCloud() {
+  if (!isConfigured()) return;
+  if (syncInProgress) {syncAgain=true;return;}
+  syncInProgress=true;
+  clearTimeout(syncTimer);
+  const versionBefore=localVersion;
   setSync("Синхронизация…");
   try {
-    const result = await jsonp({action:"load"});
-    if (!result || !result.ok) throw new Error("load failed");
-    const cloud = result.data;
-    if (cloud && Array.isArray(cloud.tasks)) {
-      const localTime = Number(cached?.updatedAt || 0);
-      const cloudTime = Number(cloud.updatedAt || 0);
-      if (cloudTime >= localTime) {
-        tasks = cloud.tasks;
-        localSave();
-      } else {
-        await saveCloud();
-      }
-    } else if (tasks.length) {
-      await saveCloud();
-    }
-    cloudReady = true;
-    render();
-    setSync("Синхронизировано", "ok");
-  } catch(e) {
-    setSync("Нет связи · локальные данные", "bad");
+    // Сначала загружаем облако, чтобы не отправлять устаревший список.
+    const loaded=await jsonp({action:"load"});
+    if (!loaded?.ok) throw new Error(loaded?.error || "load failed");
+    mergeData(loaded.data);
+    const payload=btoa(unescape(encodeURIComponent(JSON.stringify({tasks,deleted}))));
+    const saved=await jsonp({action:"save",data:payload});
+    if (!saved?.ok || !saved.data) throw new Error(saved?.error || "save failed");
+    mergeData(saved.data);
+    if (localVersion===versionBefore) setSync("Синхронизировано","ok");
+    else syncAgain=true;
+  } catch(err) {
+    setSync("Нет связи · данные на устройстве","bad");
+  } finally {
+    syncInProgress=false;
+    if (syncAgain) {syncAgain=false;scheduleSync();}
   }
+}
+function loadCloud() {
+  const local=readLocal();
+  tasks=local.tasks;deleted=local.deleted || {};
+  lastStamp=Math.max(Date.now(),...tasks.map(t=>Number(t.updatedAt||0)),...Object.values(deleted).map(Number));
+  render();
+  if (isConfigured()) syncCloud();
+  else setSync("Только на этом устройстве");
 }
 function resetForm() {
   form.reset();
@@ -268,9 +292,9 @@ form.addEventListener("submit", e => {
     deadline:$("deadline").value
   };
   if (editingId) {
-    tasks = tasks.map(t => t.id === editingId ? {...t, ...fields, updatedAt:Date.now()} : t);
+    tasks = tasks.map(t => t.id === editingId ? {...t, ...fields, updatedAt:stamp()} : t);
   } else {
-    tasks.push({id:crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+Math.random(), ...fields, urgent:false, createdAt:Date.now(), updatedAt:Date.now()});
+    tasks.push({id:crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+Math.random(), ...fields, urgent:false, completed:false, createdAt:stamp(), updatedAt:lastStamp});
   }
   resetForm();
   changed();
@@ -283,8 +307,14 @@ $("tasks").addEventListener("click", e => {
   const task = tasks.find(t => t.id === id);
   if (!task) return;
   if (e.target.closest(".urgent-btn")) {
+    if (task.completed) return;
     task.urgent = !task.urgent;
-    task.updatedAt = Date.now();
+    task.updatedAt = stamp();
+    changed();
+  } else if (e.target.closest(".complete-btn")) {
+    task.completed = !task.completed;
+    if (task.completed) task.urgent = false;
+    task.updatedAt = stamp();
     changed();
   } else if (e.target.closest(".edit-btn")) {
     editingId = id;
@@ -299,13 +329,14 @@ $("tasks").addEventListener("click", e => {
     window.scrollTo({top:0,behavior:"smooth"});
   } else if (e.target.closest(".delete-btn")) {
     if (confirm("Удалить эту задачу?")) {
+      deleted[id] = stamp();
       tasks = tasks.filter(t => t.id !== id);
       if (editingId === id) resetForm();
       changed();
     }
   }
 });
-window.addEventListener("online", () => { if (isConfigured()) loadCloud(); });
+window.addEventListener("online", () => { if (isConfigured()) syncCloud(); });
 if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(()=>{}));
 }
