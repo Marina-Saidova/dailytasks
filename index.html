@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f8edf2">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Ежедневник">
+  <title>Ежедневник</title>
+  <link rel="manifest" href="./manifest.json">
+  <style>
+    :root{--bg:#fbf8fa;--card:#fff;--ink:#30272d;--muted:#8b7e86;--pink:#d88eaf;--pink-dark:#bd6f94;--line:#eee5ea;--urgent:#d64d69;--shadow:0 8px 24px rgba(75,40,57,.06)}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--ink);font:15px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:env(safe-area-inset-top) 14px calc(24px + env(safe-area-inset-bottom))}
+    main{max-width:720px;margin:0 auto}
+    header{display:flex;align-items:center;justify-content:space-between;padding:22px 2px 18px}
+    h1{font-size:27px;letter-spacing:-.7px;margin:0;font-weight:750}
+    #syncState{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+    .dot{width:7px;height:7px;border-radius:50%;background:#d0a6b8}
+    .dot.ok{background:#5aaf83}.dot.bad{background:#d64d69}
+    .panel{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:17px;box-shadow:var(--shadow)}
+    .section-title{font-size:11px;font-weight:750;letter-spacing:1.1px;color:var(--muted);margin:0 0 14px}
+    .fields{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+    label{display:block;font-size:12px;font-weight:650;color:#746670;margin:0 0 6px}
+    input{width:100%;height:43px;border:1px solid var(--line);border-radius:11px;padding:0 11px;background:#fff;color:var(--ink);font:inherit;font-size:14px;outline:none;min-width:0}
+    input:focus{border-color:var(--pink);box-shadow:0 0 0 3px #d88eaf22}
+    .wide{grid-column:1/-1}
+    button{font:inherit;cursor:pointer;border:0}
+    #addBtn{width:100%;height:46px;border-radius:12px;background:var(--pink);color:white;font-weight:700;margin-top:14px}
+    #addBtn:active{background:var(--pink-dark)}
+    #cancelEdit{display:none;background:#f5eef2;color:#76636e;border-radius:10px;padding:0 14px;height:42px;margin-top:9px;width:100%}
+    .list-head{display:flex;align-items:center;justify-content:space-between;margin:25px 2px 11px}
+    .list-head .section-title{margin:0}
+    #count{font-size:12px;color:var(--muted)}
+    #tasks{display:flex;flex-direction:column;gap:8px}
+    .task{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:10px 9px;display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:9px;align-items:center;box-shadow:0 3px 12px rgba(75,40,57,.035)}
+    .group-heading{font-size:11px;font-weight:750;letter-spacing:.65px;color:#8b7e86;padding:13px 3px 5px}
+    .group-heading:first-child{padding-top:2px}
+    .urgent-heading{color:var(--urgent)}
+    .task.urgent{border-color:#efc3ce;background:#fffafb}
+    .urgent-btn{width:30px;height:30px;border-radius:9px;background:#f5eff2;color:#a99aa2;font-size:20px;font-weight:800;line-height:1}
+    .task.urgent .urgent-btn{background:#fde8ed;color:var(--urgent)}
+    .task-main{min-width:0}
+    .task-top{display:flex;gap:7px;align-items:center;min-width:0;margin-bottom:3px}
+    .tu{font-size:11px;font-weight:750;color:var(--pink-dark);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:45%}
+    .application{font-size:11px;color:var(--muted);white-space:nowrap}
+    .task-desc{font-size:13px;font-weight:620;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .task-meta{font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px}
+    .task-actions{display:flex;gap:3px}
+    .small-btn{width:27px;height:30px;border-radius:8px;background:transparent;color:#9b8d95;font-size:15px}
+    .small-btn:active{background:#f5eef2}
+    .empty{padding:28px 12px;text-align:center;color:var(--muted);font-size:13px;background:#fff;border:1px dashed var(--line);border-radius:14px}
+    .footnote{text-align:center;color:#aa9da5;font-size:10px;margin:18px 0 0}
+    @media(max-width:430px){body{padding-left:11px;padding-right:11px}.panel{padding:14px}.task{grid-template-columns:30px minmax(0,1fr) auto;gap:7px}.small-btn{width:24px}}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Ежедневник</h1>
+    <div id="syncState"><span class="dot" id="syncDot"></span><span id="syncText">Локально</span></div>
+  </header>
+
+  <section class="panel">
+    <p class="section-title" id="formTitle">НОВАЯ ЗАДАЧА</p>
+    <form id="taskForm">
+      <div class="fields">
+        <div><label for="tu">ТУ</label><input id="tu" placeholder="Например, Камчатка" autocomplete="off"></div>
+        <div><label for="application">Заявка</label><input id="application" placeholder="Номер заявки" autocomplete="off"></div>
+        <div class="wide"><label for="description">Что надо сделать</label><input id="description" placeholder="Кратко опишите задачу" required autocomplete="off"></div>
+        <div><label for="assignee">Исполнитель</label><input id="assignee" placeholder="Имя или фамилия" autocomplete="off"></div>
+        <div><label for="deadline">Срок</label><input id="deadline" type="date"></div>
+      </div>
+      <button id="addBtn" type="submit">+ Добавить задачу</button>
+      <button id="cancelEdit" type="button">Отменить редактирование</button>
+    </form>
+  </section>
+
+  <div class="list-head">
+    <p class="section-title">СПИСОК ЗАДАЧ</p>
+    <span id="count">0 задач</span>
+  </div>
+  <section id="tasks" aria-live="polite"></section>
+  <p class="footnote">Задачи сохраняются автоматически</p>
+</main>
+
+<script>
+/*
+  После публикации Google Apps Script вставьте URL веб-приложения в SYNC_URL.
+  ACCESS_KEY должен совпадать со значением в Code.gs.
+*/
+const SYNC_URL = "ВСТАВЬТЕ_URL_ВЕБ_ПРИЛОЖЕНИЯ_GOOGLE_APPS_SCRIPT";
+const ACCESS_KEY = "change-this-key-please";
+const STORAGE_KEY = "simple-diary-v1";
+
+let tasks = [];
+let editingId = null;
+let syncTimer = null;
+let cloudReady = false;
+
+const $ = id => document.getElementById(id);
+const form = $("taskForm");
+
+function setSync(label, status="") {
+  $("syncText").textContent = label;
+  $("syncDot").className = "dot " + status;
+}
+function isConfigured() {
+  return SYNC_URL.startsWith("https://script.google.com/") && !SYNC_URL.includes("ВСТАВЬТЕ_URL");
+}
+function localSave() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({tasks, updatedAt: Date.now()}));
+}
+function dateLabel(value) {
+  if (!value) return "без срока";
+  const p = value.split("-");
+  return p.length === 3 ? `${p[2]}.${p[1]}.${p[0]}` : value;
+}
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function sortedTasks() {
+  return [...tasks].sort((a,b) => Number(b.urgent)-Number(a.urgent) || (a.createdAt-b.createdAt));
+}
+function taskRow(t) {
+  return `
+    <article class="task ${t.urgent ? "urgent" : ""}" data-id="${escapeHtml(t.id)}">
+      <button class="urgent-btn" title="${t.urgent ? "Снять срочность" : "Сделать срочной"}" aria-label="Переключить срочность">!</button>
+      <div class="task-main">
+        <div class="task-top">
+          <span class="tu">${escapeHtml(t.tu || "Без ТУ")}</span>
+          ${t.application ? `<span class="application">· ${escapeHtml(t.application)}</span>` : ""}
+        </div>
+        <div class="task-desc" title="${escapeHtml(t.description)}">${escapeHtml(t.description)}</div>
+        <div class="task-meta">${escapeHtml(t.assignee || "Исполнитель не указан")}</div>
+      </div>
+      <div class="task-actions">
+        <button class="small-btn edit-btn" title="Изменить" aria-label="Изменить задачу">✎</button>
+        <button class="small-btn delete-btn" title="Удалить" aria-label="Удалить задачу">×</button>
+      </div>
+    </article>`;
+}
+function groupTitle(date) {
+  if (!date) return "Без срока";
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  const d = new Date(date + "T00:00:00");
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate()+1);
+  const fmt = dateLabel(date);
+  if (d.getTime() === today.getTime()) return "Сегодня · " + fmt;
+  if (d.getTime() === tomorrow.getTime()) return "Завтра · " + fmt;
+  return fmt;
+}
+function render() {
+  const list = $("tasks");
+  const ordered = sortedTasks();
+  $("count").textContent = `${tasks.length} ${tasks.length===1?"задача":(tasks.length>=2&&tasks.length<=4?"задачи":"задач")}`;
+  if (!ordered.length) {
+    list.innerHTML = '<div class="empty">Пока задач нет. Добавьте первую задачу выше.</div>';
+    return;
+  }
+
+  const urgent = ordered.filter(t => t.urgent);
+  const regular = ordered.filter(t => !t.urgent);
+  const byDate = new Map();
+  regular.forEach(t => {
+    const key = t.deadline || "";
+    if (!byDate.has(key)) byDate.set(key, []);
+    byDate.get(key).push(t);
+  });
+  const dateKeys = [...byDate.keys()].sort((a,b) => {
+    if (!a) return 1;
+    if (!b) return -1;
+    return a.localeCompare(b);
+  });
+
+  let markup = "";
+  if (urgent.length) {
+    markup += `<div class="group-heading urgent-heading">СРОЧНЫЕ</div>${urgent.map(taskRow).join("")}`;
+  }
+  dateKeys.forEach(date => {
+    markup += `<div class="group-heading">${escapeHtml(groupTitle(date))}</div>${byDate.get(date).map(taskRow).join("")}`;
+  });
+  list.innerHTML = markup;
+}
+function changed() {
+  localSave();
+  render();
+  scheduleSync();
+}
+function scheduleSync() {
+  if (!isConfigured()) { setSync("Только на этом устройстве"); return; }
+  setSync("Сохранение…");
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(saveCloud, 500);
+}
+function jsonp(params) {
+  return new Promise((resolve, reject) => {
+    const cb = "diary_cb_" + Math.random().toString(36).slice(2);
+    const script = document.createElement("script");
+    const timeout = setTimeout(() => { cleanup(); reject(new Error("timeout")); }, 15000);
+    function cleanup(){ clearTimeout(timeout); delete window[cb]; script.remove(); }
+    window[cb] = data => { cleanup(); resolve(data); };
+    script.onerror = () => { cleanup(); reject(new Error("network")); };
+    const query = new URLSearchParams({...params, callback:cb, key:ACCESS_KEY});
+    script.src = SYNC_URL + (SYNC_URL.includes("?") ? "&" : "?") + query.toString();
+    document.head.appendChild(script);
+  });
+}
+async function saveCloud() {
+  try {
+    const payload = btoa(unescape(encodeURIComponent(JSON.stringify({tasks, updatedAt:Date.now()}))));
+    const result = await jsonp({action:"save", data:payload});
+    if (!result || !result.ok) throw new Error("save failed");
+    cloudReady = true;
+    setSync("Синхронизировано", "ok");
+  } catch(e) {
+    setSync("Нет связи · сохранено на устройстве", "bad");
+  }
+}
+async function loadCloud() {
+  const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+  tasks = Array.isArray(cached?.tasks) ? cached.tasks : [];
+  render();
+  if (!isConfigured()) { setSync("Только на этом устройстве"); return; }
+  setSync("Синхронизация…");
+  try {
+    const result = await jsonp({action:"load"});
+    if (!result || !result.ok) throw new Error("load failed");
+    const cloud = result.data;
+    if (cloud && Array.isArray(cloud.tasks)) {
+      const localTime = Number(cached?.updatedAt || 0);
+      const cloudTime = Number(cloud.updatedAt || 0);
+      if (cloudTime >= localTime) {
+        tasks = cloud.tasks;
+        localSave();
+      } else {
+        await saveCloud();
+      }
+    } else if (tasks.length) {
+      await saveCloud();
+    }
+    cloudReady = true;
+    render();
+    setSync("Синхронизировано", "ok");
+  } catch(e) {
+    setSync("Нет связи · локальные данные", "bad");
+  }
+}
+function resetForm() {
+  form.reset();
+  editingId = null;
+  $("formTitle").textContent = "НОВАЯ ЗАДАЧА";
+  $("addBtn").textContent = "+ Добавить задачу";
+  $("cancelEdit").style.display = "none";
+}
+form.addEventListener("submit", e => {
+  e.preventDefault();
+  const description = $("description").value.trim();
+  if (!description) return;
+  const fields = {
+    tu:$("tu").value.trim(),
+    application:$("application").value.trim(),
+    description,
+    assignee:$("assignee").value.trim(),
+    deadline:$("deadline").value
+  };
+  if (editingId) {
+    tasks = tasks.map(t => t.id === editingId ? {...t, ...fields, updatedAt:Date.now()} : t);
+  } else {
+    tasks.push({id:crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+Math.random(), ...fields, urgent:false, createdAt:Date.now(), updatedAt:Date.now()});
+  }
+  resetForm();
+  changed();
+});
+$("cancelEdit").addEventListener("click", resetForm);
+$("tasks").addEventListener("click", e => {
+  const article = e.target.closest(".task");
+  if (!article) return;
+  const id = article.dataset.id;
+  const task = tasks.find(t => t.id === id);
+  if (!task) return;
+  if (e.target.closest(".urgent-btn")) {
+    task.urgent = !task.urgent;
+    task.updatedAt = Date.now();
+    changed();
+  } else if (e.target.closest(".edit-btn")) {
+    editingId = id;
+    $("tu").value = task.tu || "";
+    $("application").value = task.application || "";
+    $("description").value = task.description || "";
+    $("assignee").value = task.assignee || "";
+    $("deadline").value = task.deadline || "";
+    $("formTitle").textContent = "ИЗМЕНИТЬ ЗАДАЧУ";
+    $("addBtn").textContent = "Сохранить изменения";
+    $("cancelEdit").style.display = "block";
+    window.scrollTo({top:0,behavior:"smooth"});
+  } else if (e.target.closest(".delete-btn")) {
+    if (confirm("Удалить эту задачу?")) {
+      tasks = tasks.filter(t => t.id !== id);
+      if (editingId === id) resetForm();
+      changed();
+    }
+  }
+});
+window.addEventListener("online", () => { if (isConfigured()) loadCloud(); });
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(()=>{}));
+}
+loadCloud();
+</script>
+</body>
+</html>
